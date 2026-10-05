@@ -54,8 +54,15 @@ async function prepareBlankEditor() {
       return rect.width > 200 && rect.height > 80;
     });
     if (/\/articles\/edit\/\d+/.test(location.href) && editor) {
-      if (editor.textContent.trim()) return { ok: false, error: '编辑器已有正文，拒绝覆盖非空草稿' };
-      return { ok: true };
+      let fiber = editor[Object.keys(editor).find(key => key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$'))];
+      while (fiber) {
+        const state = fiber.stateNode?.props?.editorState;
+        if (state && typeof fiber.stateNode.props.onChange === 'function') {
+          if (!xArticleDraftBlank(state.getCurrentContent())) return { ok: false, error: '编辑器已有内容，拒绝覆盖非空草稿' };
+          return { ok: true, articleId: location.href.match(/\/articles\/edit\/(\d+)/)[1] };
+        }
+        fiber = fiber.return;
+      }
     }
     if (!clicked) {
       const create = document.querySelector('button[aria-label="create" i], [role="button"][aria-label="create" i]');
@@ -75,6 +82,7 @@ async function openBlankDraft() {
   while (Date.now() < deadline) {
     const state = await chrome.tabs.get(tab.id);
     if (state.url?.startsWith('https://x.com/') && state.status === 'complete') {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', files: ['xpage.js'] });
       const [result] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: 'MAIN', func: prepareBlankEditor });
       const final = await chrome.tabs.get(tab.id);
       if (/^https:\/\/x\.com\/compose\/articles\/edit\/\d+/.test(final.url)) {
@@ -82,7 +90,7 @@ async function openBlankDraft() {
         ui.draft.textContent = '查看 X 草稿';
       }
       if (!result?.result?.ok) throw new Error(result?.result?.error || '无法确认新草稿');
-      return tab.id;
+      return { tabId: tab.id, articleId: result.result.articleId };
     }
     await new Promise(resolve => setTimeout(resolve, 500));
   }
@@ -105,9 +113,9 @@ ui.import.addEventListener('click', async () => {
       ui.status.textContent = total ? `准备图片 ${done}/${total}…` : '正在准备文章…';
     });
     ui.status.textContent = '正在打开新的 X 草稿…';
-    const tabId = await openBlankDraft();
+    const { tabId, articleId } = await openBlankDraft();
+    payload.articleId = articleId;
     ui.status.textContent = `正在导入正文及 ${payload.images.length} 张图片，请保持本页面和 X 页面打开，等待完成后再编辑。`;
-    await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', files: ['xpage.js'] });
     const [injected] = await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN',
       func: async payload => {
         try { return await window.__xArticleWrite(payload); }

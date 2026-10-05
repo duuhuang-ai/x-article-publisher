@@ -12,7 +12,7 @@
     button.id = 'hermes-import-btn';
     button.type = 'button';
     button.textContent = '📥 选择 Markdown';
-    button.style.cssText = 'position:fixed;top:12px;right:12px;z-index:99998;background:#116ab5;color:white;padding:8px 16px;border:0;border-radius:20px;font:600 13px system-ui;cursor:pointer';
+    button.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99998;background:#116ab5;color:white;padding:8px 16px;border:0;border-radius:20px;font:600 13px system-ui;cursor:pointer';
     button.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'open-importer' }));
     document.body.appendChild(button);
   }

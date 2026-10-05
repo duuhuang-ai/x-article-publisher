@@ -16,9 +16,28 @@ function xArticleImageSaved(props, entityKey, mediaId) {
     && props.mediaIdToLocalMediaIdMap?.[mediaId]);
 }
 
+function xArticleDraftBlank(content) {
+  const blocks = content?.getBlocksAsArray?.();
+  return !!blocks?.length && blocks.every(block => block.getType() !== 'atomic' && !block.getText().trim()
+    && !block.getCharacterList().some(character => character.getEntity() != null));
+}
+
+function xArticleContentSaved(props, blocks, title) {
+  const saved = props?.articleEntity;
+  return !!saved?.content_state?.blocks && (!title || saved.title === title)
+    && saved.content_state.blocks.length === blocks.length
+    && blocks.every((block, i) => saved.content_state.blocks[i].key === block.getKey()
+      && saved.content_state.blocks[i].text === block.getText());
+}
+
 window.__xArticleWrite = async function(payload) {
   const LOG = '[xArticle]';
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const targetId = payload.articleId || articleIdFromUrl();
+
+  function assertTarget() {
+    if (!targetId || articleIdFromUrl() !== targetId) throw new Error('草稿页面已切换，拒绝写入');
+  }
 
   function articleIdFromUrl() {
     return location.href.match(/\/articles\/edit\/(\d+)/)?.[1] || null;
@@ -26,6 +45,7 @@ window.__xArticleWrite = async function(payload) {
 
   // ── Editor Discovery ──────────────────────────────────
   function findEditorElement() {
+    assertTarget();
     const sel = '[data-contents="true"] [contenteditable="true"], [contenteditable="true"][role="textbox"], [contenteditable="true"].public-DraftEditor-content, [contenteditable="true"]';
     for (const el of document.querySelectorAll(sel)) {
       const r = el.getBoundingClientRect();
@@ -79,7 +99,7 @@ window.__xArticleWrite = async function(payload) {
     }) || null;
   }
 
-  // 全新的空 X 文章编辑器里没有任何字符，writeDraftBlocks 找不到字符样本会失败、降级成 HTML 粘贴，
+  // 全新的空 X 文章编辑器里没有任何字符，writeDraftBlocks 找不到字符样本会失败，
   // 导致后续 marker/图片落位全乱。这里先敲一个字符让 Draft 生成真实 CharacterMetadata（xPoster 技巧）。
   // writeDraftBlocks 会用全新 blockMap 覆盖，这个临时字符块随后被丢弃，不会残留。
   async function ensureDraftCharacterSample(draftNode) {
@@ -632,6 +652,7 @@ window.__xArticleWrite = async function(payload) {
     } else {
       best.focus();
       await sleep(80);
+      assertTarget();
       document.execCommand('selectAll', false);
       document.execCommand('insertText', false, String(title));
       best.dispatchEvent(new Event('input', { bubbles: true }));
@@ -678,10 +699,15 @@ window.__xArticleWrite = async function(payload) {
 
   // ── Main Flow ─────────────────────────────────────────
   async function runFlow(p) {
+    if (!targetId || articleIdFromUrl() !== targetId) return { ok: false, error: '草稿页面已切换，拒绝写入' };
     let draftNode = findDraftStateNode();
     if (!draftNode) return { ok: false, error: 'Draft.js editor not found. Are you on an X Article edit page?' };
+    const existing = articleProps()?.articleEntity;
+    if (!xArticleDraftBlank(draftNode.props.editorState.getCurrentContent()) || existing?.title?.trim() || existing?.cover_media?.media_id) {
+      return { ok: false, error: '编辑器已有内容，拒绝覆盖非空草稿' };
+    }
 
-    let articleId = p.articleId || articleIdFromUrl();
+    const articleId = targetId;
     const summary = {
       atomicOk: 0, atomicFail: 0,
       imgOk: 0, imgFail: 0, images: [],
@@ -704,26 +730,20 @@ window.__xArticleWrite = async function(payload) {
 
       // ── Write blocks ──
       console.log(LOG, 'Writing content blocks...');
-      // 空编辑器先造出字符样本，否则 writeDraftBlocks 必失败、降级 HTML 粘贴导致图片落位错乱
+      draftNode = findDraftStateNode() || draftNode;
+      if (!xArticleDraftBlank(draftNode.props.editorState.getCurrentContent())) throw new Error('编辑器已有内容，拒绝覆盖非空草稿');
+      // 空编辑器先造出字符样本，否则 writeDraftBlocks 会失败
       draftNode = await ensureDraftCharacterSample(draftNode) || draftNode;
       const coverMarkers = new Set((p.images || []).filter(image => image.coverOnly).map(image => image.marker));
-      const wr = writeDraftBlocks(draftNode, p.blocks.filter(block => !coverMarkers.has(block.text)));
-      if (!wr.ok) {
-        // Fallback: paste HTML
-        console.log(LOG, 'Block write failed, trying HTML paste...');
-        const editor = findEditorElement();
-        if (editor) {
-          editor.focus();
-          const dt = new DataTransfer();
-          dt.setData('text/html', p.html);
-          dt.setData('text/plain', p.plain);
-          const ev = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });
-          if (ev.clipboardData !== dt) Object.defineProperty(ev, 'clipboardData', { value: dt });
-          editor.dispatchEvent(ev);
-        }
-      }
+      const body = p.blocks.filter(block => !coverMarkers.has(block.text));
+      const wr = writeDraftBlocks(draftNode, body);
+      if (!wr.ok) throw new Error(`正文写入失败：${wr.error}`);
       await sleep(500);
       draftNode = findDraftStateNode() || draftNode;
+      const written = draftNode.props.editorState.getCurrentContent().getBlocksAsArray();
+      if (written.length !== body.length || written.some((block, i) => block.getText() !== body[i].text)) {
+        throw new Error('正文写入不完整，请检查草稿');
+      }
 
       // ── Atomic blocks (tweets, code, dividers) ──
       const atomicOps = (p.plan || []).filter(item => item.op.type === 'atomic');
@@ -812,6 +832,14 @@ window.__xArticleWrite = async function(payload) {
       });
       if (JSON.stringify(imageIds) !== JSON.stringify(summary.images.map(image => image.mediaId))) {
         throw new Error('正文图片数量或顺序发生变化，请检查草稿');
+      }
+
+      // X debounces body saving; an unchanged empty media list is not save evidence.
+      const blocks = content.getBlocksAsArray();
+      const deadline = Date.now() + 60000;
+      while (!xArticleContentSaved(articleProps(), blocks, p.title)) {
+        if (Date.now() >= deadline) throw new Error('标题或正文尚未保存，请检查网络及草稿');
+        await sleep(500);
       }
 
       const incomplete = summary.imgFail || summary.atomicFail

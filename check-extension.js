@@ -76,11 +76,16 @@ async function checkImportFlow() {
     addEventListener(type, handler) { this.handlers[type] = handler; }
   }
   const elements = Object.fromEntries(['markdown','details','folder-section','folder','folder-name','import','status','draft'].map(id => [id, new Element()]));
-  let permission = false, created = 0, written = 0, engineOK = true, nonempty = false;
-  const editor = { textContent: '', getBoundingClientRect: () => ({ width: 600, height: 400 }) };
+  let permission = false, created = 0, written = 0, engineOK = true, nonempty = false, atomic = false;
+  const content = { getBlocksAsArray: () => [{ getType: () => atomic ? 'atomic' : 'unstyled', getText: () => nonempty ? 'old draft' : '', getCharacterList: () => ({ some: () => false }) }] };
+  const editor = { textContent: '', getBoundingClientRect: () => ({ width: 600, height: 400 }),
+    __reactFiber$test: { stateNode: { props: { editorState: { getCurrentContent: () => content }, onChange() {} } } } };
   const page = { location: { href: 'https://x.com/compose/articles/edit/123' },
     document: { querySelectorAll: () => { editor.textContent = nonempty ? 'old draft' : ''; return [editor]; }, querySelector: () => null },
-    window: { __xArticleWrite: async () => { written++; return { ok: engineOK, error: '测试注入失败' }; } }, Date, Promise, setTimeout };
+    window: { __xArticleWrite: async payload => { assert.equal(payload.articleId, '123', '写入必须绑定刚确认的新草稿'); written++; return { ok: engineOK, error: '测试注入失败' }; } }, Date, Promise, setTimeout };
+  const engine = { window: {}, console: { log() {} } };
+  vm.runInNewContext(fs.readFileSync('./xpage.js', 'utf8'), engine);
+  page.xArticleDraftBlank = engine.xArticleDraftBlank;
   const imported = { window: { xPosterShared: shared, xArticleFiles: context.window.xArticleFiles },
     document: { getElementById: id => elements[id] }, console, URL, Date, Promise, setTimeout,
     chrome: { permissions: { request: async () => permission }, tabs: {
@@ -106,6 +111,9 @@ async function checkImportFlow() {
   assert.match(elements.status.textContent, /失败/); assert(!elements.status.textContent.includes('完成'));
   nonempty = true;
   const before = written;
+  await elements.import.handlers.click();
+  assert.equal(written, before); assert.match(elements.status.textContent, /非空|已有/);
+  nonempty = false; atomic = true;
   await elements.import.handlers.click();
   assert.equal(written, before); assert.match(elements.status.textContent, /非空|已有/);
 }
