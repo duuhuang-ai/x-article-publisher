@@ -47,13 +47,13 @@
 
 **Interfaces:** 后台 `openImporter() -> Promise<tab>`，支持图标点击和 content script 的 `{type:'open-importer'}` 消息。导入页面使用 Task 1 三个 API；`openBlankDraft() -> Promise<tabId>` 创建新标签，等待新空编辑器。随后 `chrome.scripting.executeScript({files:['xpage.js'], world:'MAIN', target:{tabId}})`，再执行 `window.__xArticleWrite(payload)` 并读取真实结果。
 
-- [ ] 扩展图标和 X 浮动按钮都打开独立导入页面。manifest 添加 action，移除必需 localhost 权限，声明可选 HTTP/HTTPS 图床权限，保留 X 权限。
-- [ ] 文件选择完成后显示标题和图片数；仅当解析出本地图片时显示附件文件夹选择。目录授权复用 shared 的现有句柄存储，不改存储结构。
-- [ ] 点击「导入 X 草稿」时先同步调用 `chrome.permissions.request` 申请 `imageOrigins(parsed)`，再准备图片；拒绝授权停止。按钮在整个任务期间禁用，显示图片准备进度和导入状态。
-- [ ] `openBlankDraft` 只操作新建标签中的 X 新文章入口；复用已验证的 create 按钮选择器。最多等待 60 秒；确认 edit URL、新编辑器正文为空后才写入。页失效、没有入口或正文非空必须失败。
-- [ ] 真实结果 `ok:true` 才显示完成和草稿链接；失败显示原因和已创建草稿链接，不删除草稿、不自动重试部分写入、不点击发布。
-- [ ] 在 `check-extension.js` 用 Chrome API 模拟覆盖：权限拒绝不创建草稿、双击只有一个任务、编辑器非空拒绝、注入失败不能显示成功；为导入模块提供最小 DOM 模拟。运行新增与既有检查。
-- [ ] Chrome 重载扩展，先用纯文字文件验证入口和新草稿创建；保留失败证据，再提交本任务文件。
+- [x] 扩展图标和 X 浮动按钮都打开独立导入页面。manifest 添加 action，移除必需 localhost 权限，声明可选 HTTP/HTTPS 图床权限，保留 X 权限。
+- [x] 文件选择完成后显示标题和图片数；仅当解析出本地图片时显示附件文件夹选择。目录授权复用 shared 的现有句柄存储，不改存储结构。
+- [x] 点击「导入 X 草稿」时先同步调用 `chrome.permissions.request` 申请 `imageOrigins(parsed)`，再准备图片；拒绝授权停止。按钮在整个任务期间禁用，显示图片准备进度和导入状态。
+- [x] `openBlankDraft` 只操作新建标签中的 X 新文章入口；复用已验证的 create 按钮选择器。最多等待 60 秒；确认 edit URL、新编辑器正文为空后才写入。页失效、没有入口或正文非空必须失败。
+- [x] 真实结果 `ok:true` 才显示完成和草稿链接；失败显示原因和已创建草稿链接，不删除草稿、不自动重试部分写入、不点击发布。
+- [x] 在 `check-extension.js` 用 Chrome API 模拟覆盖：权限拒绝不创建草稿、双击只有一个任务、编辑器非空拒绝、注入失败不能显示成功；为导入模块提供最小 DOM 模拟。运行新增与既有检查。
+- [x] Chrome 重载扩展，先用纯文字文件验证入口和新草稿创建；保留失败证据，再提交本任务文件。
 
 ## Task 3: 真实图床文章验证与交付
 
