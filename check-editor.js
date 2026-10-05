@@ -82,5 +82,41 @@ async function failedWrite(title, type = 'unstyled', articleId = '123', text = '
   assert.equal(savedContent(props, current, 'title'), true);
   assert.equal(savedContent(props, current, 'wrong title'), false);
   assert.equal(savedContent({ articleEntity: { title: 'title', content_state: { blocks: [] } } }, current, 'title'), false);
+  await checkRelocation();
   console.log('PASS: 空草稿/目标绑定、写入失败及服务端正文标题保存确认');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+async function checkRelocation() {
+  function MapOf(blocks = []) { const map = new Map(blocks.map(b => [b.getKey(), b])); map.constructor = MapOf; return map; }
+  const block = (key, text, entity) => ({ getKey: () => key, getType: () => entity ? 'atomic' : 'unstyled', getText: () => text,
+    getCharacterList: () => ({ first: () => entity ? { getEntity: () => entity } : null, get: () => ({ getEntity: () => entity }) }),
+    findEntityRanges: (test, fn) => { if (entity) fn(0); } });
+  function makeNode(hasTarget) {
+    let writes = 0, map = MapOf([block('old', ' ', 'old'), ...(hasTarget ? [block('new', ' ', 'wanted')] : []), block('marker', '__XPOSTER_a_IMAGE_1__')]);
+    const content = { getBlockMap: () => map, getBlocksAsArray: () => [...map.values()],
+      getEntity: entity => ({ getType: () => 'MEDIA', getData: () => ({ mediaItems: [{ mediaId: entity }] }) }),
+      set: (key, value) => { if (key === 'blockMap') map = value; return content; } };
+    class Selection { static createEmpty() { return new Selection(); } }
+    class State { getCurrentContent() { return content; } getSelection() { return new Selection(); }
+      static push() { return new State(); } static moveSelectionToEnd(state) { return state; } }
+    return { props: { editorState: new State(), onChange() { writes++; } }, writes: () => writes };
+  }
+  const stale = makeNode(false), fresh = makeNode(true);
+  const editor = { getBoundingClientRect: () => ({ width: 600, height: 400 }), __reactFiber$test: { stateNode: fresh } };
+  const page = { window: {}, location: { href: 'https://x.com/compose/articles/edit/123' }, document: { querySelectorAll: () => [editor] },
+    setTimeout: fn => fn(), console: { log() {} } };
+  const source = fs.readFileSync(require.resolve('./xpage.js'), 'utf8');
+  // Expose the existing private functions only in this VM; their implementation is unchanged.
+  assert(source.includes('return await runFlow(payload);'));
+  vm.runInNewContext(source.replace('return await runFlow(payload);', 'return { relocateImages, settleUploadedImageAtMarker };'), page);
+  const api = await page.window.__xArticleWrite({ articleId: '123' });
+  const upload = { mediaId: 'wanted', blockKey: 'new', entityKey: 'wanted', markerBlock: 'marker', marker: '__XPOSTER_a_IMAGE_1__', markerExact: true };
+  const missing = api.relocateImages(stale, [upload], new Set());
+  assert.equal(missing.moved, 0, '缺失目标不能搬运第一张旧图');
+  assert.equal(missing.missing, 1);
+  assert.equal(stale.writes(), 0);
+  const result = await api.settleUploadedImageAtMarker(stale, upload, new Set());
+  assert.equal(result.missing, 0, '上传后应读取当前编辑器');
+  assert.equal(stale.writes(), 0);
+  assert.equal(fresh.writes(), 1);
+}

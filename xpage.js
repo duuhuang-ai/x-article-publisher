@@ -491,8 +491,7 @@ window.__xArticleWrite = async function(payload) {
     const SelectionState = editorState.getSelection().constructor;
     const contentState = editorState.getCurrentContent();
     const blockMap = contentState.getBlockMap();
-    const entityToBlock = new Map();
-    const mediaBlocks = [];
+    const mediaIdToBlock = new Map();
 
     // 重新定位 marker（块可能因前面的搬运/清理而变化）
     for (const upload of uploads) {
@@ -506,43 +505,23 @@ window.__xArticleWrite = async function(payload) {
       }
     }
 
-    // 收集所有"非受保护"的 MEDIA atomic 块（受保护的是推文/代码/分割线等）
+    // Block/entity keys can change after X remounts the editor; saved media IDs identify the image.
     blockMap.forEach((block, blockKey) => {
-      if (block.getType() !== 'atomic') return;
-      let firstEntity = null;
-      block.findEntityRanges(
-        (ch) => Boolean(ch.getEntity()),
-        (start) => {
-          const ek = block.getCharacterList().get(start)?.getEntity?.();
-          if (ek) {
-            firstEntity = firstEntity || ek;
-            entityToBlock.set(ek, blockKey);
-          }
-        }
-      );
-      if (protectedAtomicBlocks && protectedAtomicBlocks.has(blockKey)) return;
-      if (firstEntity) {
-        try {
-          if (contentState.getEntity(firstEntity).getType() === 'MEDIA') {
-            mediaBlocks.push({ blockKey, entityKey: firstEntity });
-          }
-        } catch {}
+      if (block.getType() !== 'atomic' || protectedAtomicBlocks?.has(blockKey)) return;
+      const entityKey = block.getCharacterList().first()?.getEntity();
+      if (!entityKey) return;
+      const entity = contentState.getEntity(entityKey);
+      if (entity.getType() === 'MEDIA') {
+        for (const item of entity.getData().mediaItems || []) mediaIdToBlock.set(item.mediaId, blockKey);
       }
     });
 
     const moves = new Map();
     let missing = 0;
-    let fallbackIndex = 0;
 
     for (const upload of uploads) {
       if (!upload.markerBlock || !blockMap.has(upload.markerBlock)) { missing++; continue; }
-      let imageBlock = upload.blockKey && blockMap.has(upload.blockKey) ? upload.blockKey : null;
-      if (!imageBlock && upload.entityKey) imageBlock = entityToBlock.get(upload.entityKey) || null;
-      if (!imageBlock) {
-        while (fallbackIndex < mediaBlocks.length && moves.has(mediaBlocks[fallbackIndex].blockKey)) fallbackIndex++;
-        imageBlock = mediaBlocks[fallbackIndex]?.blockKey || null;
-        fallbackIndex++;
-      }
+      const imageBlock = mediaIdToBlock.get(upload.mediaId);
       if (!imageBlock) { missing++; continue; }
       if (imageBlock !== upload.markerBlock) {
         moves.set(upload.markerBlock, { imageBlock, markerExact: upload.markerExact !== false });
@@ -582,6 +561,7 @@ window.__xArticleWrite = async function(payload) {
     if (!upload || upload.coverOnly) {
       return { draftNode, moved: 0, missing: 0, markerCleaned: 0 };
     }
+    draftNode = findDraftStateNode() || draftNode;
     const relocateResult = relocateImages(draftNode, [upload], protectedAtomicBlocks);
     if (relocateResult.moved || relocateResult.missing) {
       await sleep(180);
