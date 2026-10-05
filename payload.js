@@ -51,23 +51,28 @@ function buildPayload(mdPath) {
   const parsed = shared.parseMarkdown(markdown, options);
 
   const imageResults = new Map();
-  for (const seg of parsed.segments) {
-    if (seg.type !== 'image') continue;
+  const imageSegments = parsed.segments.filter(seg => seg.type === 'image');
+  const separateCover = parsed.cover && !imageSegments.some(seg => shared.imageSourcesMatch(seg.source, parsed.cover))
+    ? { type: 'image', source: parsed.cover, alt: 'cover' } : null;
+  if (separateCover) imageSegments.push(separateCover);
+  for (const seg of imageSegments) {
     const src = seg.source;
     try {
       if (src.startsWith('data:')) {
         const uri = shared.parseDataUri(src);
-        if (uri.ok) imageResults.set(seg, { ok: true, ...uri, fileName: shared.guessFileName(src) });
-      } else if (src.startsWith('http')) {
-        imageResults.set(seg, { ok: false, error: 'Remote images unsupported' });
+        imageResults.set(seg, { ...uri, fileName: shared.guessFileName(src) });
+      } else if (/^https?:\/\//i.test(src)) {
+        imageResults.set(seg, { ok: false, error: '请先用 node prepare-article.js 生成含本地图片的发布副本' });
       } else {
         const fullPath = src.startsWith('/') ? src : path.resolve(mdDir, src);
         if (fs.existsSync(fullPath)) {
           const buf = fs.readFileSync(fullPath);
           const ext = path.extname(fullPath).toLowerCase();
-          const mimeMap = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+          const mime = shared.extensionMime(fullPath, '');
+          if (!shared.isSupportedImageMime(mime)) throw new Error('Unsupported image type: ' + ext);
+          if (!buf.length || buf.length > 16 * 1024 * 1024) throw new Error('图片必须非空且不超过 16 MiB');
           let finalBuf = buf;
-          let finalMime = mimeMap[ext] || 'image/png';
+          let finalMime = mime;
           let finalName = path.basename(fullPath);
           const compressed = compressWithSips(buf, ext, fullPath);
           if (compressed) {
@@ -84,9 +89,12 @@ function buildPayload(mdPath) {
     } catch (e) {
       imageResults.set(seg, { ok: false, error: e.message });
     }
+    if (!imageResults.get(seg)?.ok) {
+      throw new Error(`图片加载失败（第 ${imageSegments.indexOf(seg) + 1} 张）：${imageResults.get(seg)?.error || 'Invalid image'}`);
+    }
   }
 
-  const planOptions = { coverSource: parsed.cover, coverResult: null };
+  const planOptions = { coverSource: parsed.cover, coverResult: separateCover ? imageResults.get(separateCover) : null };
   const pastePlan = shared.buildPastePlan(parsed.segments, imageResults, new Map(), planOptions);
 
   const imagePayloads = [];

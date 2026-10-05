@@ -136,7 +136,7 @@ const server = http.createServer((req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, 'localhost', () => {
   const auto = process.argv.includes('--auto');
   if (auto) trigger.active = true;
   

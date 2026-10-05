@@ -7,8 +7,14 @@
  *   - React Fiber internals (__reactFiber$ keys)
  *   - Draft.js editor state
  *   - X's internal GraphQL endpoints
- *   - X's image upload handler (onFilesAdded)
+ *   - X's native image paste and cover file input
  */
+
+function xArticleImageSaved(props, entityKey, mediaId) {
+  return !!(entityKey && mediaId && props?.prevMediaEntityKeys?.includes(entityKey)
+    && props.prevArticleEntityMedia?.some(media => media.media_id === mediaId)
+    && props.mediaIdToLocalMediaIdMap?.[mediaId]);
+}
 
 window.__xArticleWrite = async function(payload) {
   const LOG = '[xArticle]';
@@ -43,25 +49,19 @@ window.__xArticleWrite = async function(payload) {
     return null;
   }
 
-  function findOnFilesAdded() {
+  function articleProps() {
     const editor = findEditorElement();
     if (!editor) return null;
-    const fiberKey = Object.keys(editor).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-    if (!fiberKey) return null;
-    let fiber = editor[fiberKey];
-    for (let d = 0; d < 160 && fiber; d++) {
-      const props = fiber.memoizedProps || fiber.stateNode?.props;
-      if (typeof props?.onFilesAdded === 'function') return props.onFilesAdded;
-      // Search children
-      let child = fiber.child;
-      for (let cd = 0; cd < 8 && child; cd++) {
-        const cp = child.memoizedProps || child.stateNode?.props;
-        if (typeof cp?.onFilesAdded === 'function') return cp.onFilesAdded;
-        child = child.child;
-      }
+    let fiber = editor[Object.keys(editor).find(k => k.startsWith('__reactFiber$'))];
+    while (fiber) {
+      if (fiber.memoizedProps?.prevMediaEntityKeys) return fiber.memoizedProps;
       fiber = fiber.return;
     }
     return null;
+  }
+
+  function currentMedia() {
+    return Object.values(articleProps()?.allMedia || {});
   }
 
   function findDraftSampleBlock(draftNode) {
@@ -377,9 +377,6 @@ window.__xArticleWrite = async function(payload) {
   }
 
   async function uploadSingleImage(draftNode, imagePayload, marker, index, total) {
-    const onFilesAdded = findOnFilesAdded();
-    if (!onFilesAdded) return { ok: false, error: 'X upload handler not found' };
-
     // Place cursor at marker — X's onFilesAdded inserts at cursor position
     const markerLoc = placeSelectionAtMarker(draftNode, marker);
     if (!markerLoc) return { ok: false, error: 'Marker not found in editor' };
@@ -393,13 +390,20 @@ window.__xArticleWrite = async function(payload) {
     }
 
     // Get existing atomic blocks before upload (to detect new ones)
+    const beforeMedia = new Set(currentMedia().map(media => media.id));
     const before = new Set();
     draftNode.props.editorState.getCurrentContent().getBlockMap().forEach((block, key) => {
       if (block.getType() === 'atomic') before.add(key);
     });
 
-    // Upload — image lands at marker position
-    try { onFilesAdded([file]); } catch (e) {
+    // 走编辑器原生文件粘贴入口，让 X 自己维护上传和媒体状态。
+    try {
+      const editor = findEditorElement();
+      const clipboard = new DataTransfer();
+      clipboard.items.add(file);
+      editor.focus();
+      editor.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: clipboard }));
+    } catch (e) {
       return { ok: false, error: `Upload call failed: ${e.message}` };
     }
 
@@ -432,27 +436,18 @@ window.__xArticleWrite = async function(payload) {
         newBlock = { blockKey: chosen, block: contentState.getBlockMap().get(chosen) };
       }
       if (newBlock) {
-        let mediaId = null, entityKey = null;
-        try {
-          newBlock.block.findEntityRanges(
-            (ch) => Boolean(ch.getEntity()),
-            (start) => { entityKey = newBlock.block.getCharacterList().get(start)?.getEntity?.(); }
-          );
-          if (entityKey) {
-            const entity = contentState.getEntity(entityKey);
-            const data = entity.getData();
-            const searchForId = (d, depth) => {
-              if (depth > 5 || d == null) return null;
-              if (typeof d === 'string' && /^\d+$/.test(d.trim())) return d.trim();
-              if (typeof d !== 'object') return null;
-              const keys = ['mediaId', 'media_id', 'media_id_string', 'id_str', 'id'];
-              for (const k of keys) { if (d[k] && /^\d+/.test(String(d[k]))) return String(d[k]); }
-              for (const v of Object.values(d)) { const r = searchForId(v, depth + 1); if (r) return r; }
-              return null;
-            };
-            mediaId = searchForId(data, 0);
-          }
-        } catch (e) { /* best-effort */ }
+        const entityKey = newBlock.block.getCharacterList().first()?.getEntity();
+        const data = entityKey ? contentState.getEntity(entityKey).getData() : null;
+        const item = data?.mediaItems?.[0];
+        const media = currentMedia().find(media => media.id === item?.localMediaId);
+        if (!media || beforeMedia.has(media.id) || media.originalMediaFile?.name !== file.name) continue;
+        if (media.uploadFailed) return { ok: false, error: `Upload failed: ${file.name}` };
+        if (media.uploading || media.needsProcessing || media.uploadProgress !== 1 || !item.mediaId) continue;
+        const mediaId = item.mediaId;
+        // X 的延迟保存携带本次 entityKey。提前改动光标会覆盖它，触发旧图重传。
+        // 同时等待保存后的媒体映射，避免异步回填覆盖下一张图。
+        const props = articleProps();
+        if (!xArticleImageSaved(props, data.entityKey, mediaId)) continue;
         return {
           ok: true,
           blockKey: newBlock.blockKey,
@@ -465,57 +460,7 @@ window.__xArticleWrite = async function(payload) {
         };
       }
     }
-    return { ok: false, error: 'Upload timed out waiting for media entity' };
-  }
-
-  // ── Block deletion by key ─────────────────────────────
-  function deleteBlockByKey(draftNode, blockKey) {
-    if (!blockKey) return { ok: false, error: 'Missing block key' };
-    const editorState = draftNode.props.editorState;
-    const EditorState = editorState.constructor;
-    const SelectionState = editorState.getSelection().constructor;
-    const contentState = editorState.getCurrentContent();
-    const blockMap = contentState.getBlockMap();
-    if (!blockMap.has(blockKey)) return { ok: false, error: 'Block not found' };
-    const nextBlockMap = blockMap.delete(blockKey);
-    const lastKey = nextBlockMap.last()?.getKey?.();
-    const selection = lastKey ? SelectionState.createEmpty(lastKey) : editorState.getSelection();
-    const nextContent = contentState
-      .set('blockMap', nextBlockMap)
-      .set('selectionBefore', selection)
-      .set('selectionAfter', selection);
-    let ns = EditorState.push(editorState, nextContent, 'remove-range');
-    ns = EditorState.moveSelectionToEnd(ns);
-    draftNode.props.onChange(ns);
-    return { ok: true };
-  }
-
-  // 重新定位某张已上传图片对应的 atomic 媒体块：优先 blockKey，失效则按 entityKey / mediaId 兜底
-  // （X 完成上传后可能给块换 key，导致缓存的 blockKey 失效）
-  function findMediaBlockKey(draftNode, upload) {
-    const contentState = draftNode.props.editorState.getCurrentContent();
-    const blockMap = contentState.getBlockMap();
-    if (upload.blockKey && blockMap.has(upload.blockKey)) return upload.blockKey;
-    let found = null;
-    blockMap.forEach((block, key) => {
-      if (found || block.getType() !== 'atomic') return;
-      block.findEntityRanges(
-        (ch) => Boolean(ch.getEntity()),
-        (start) => {
-          if (found) return;
-          const ek = block.getCharacterList().get(start)?.getEntity?.();
-          if (!ek) return;
-          if (upload.entityKey && ek === upload.entityKey) { found = key; return; }
-          if (upload.mediaId) {
-            try {
-              const data = contentState.getEntity(ek).getData();
-              if (JSON.stringify(data || {}).includes(String(upload.mediaId))) found = key;
-            } catch {}
-          }
-        }
-      );
-    });
-    return found;
+    return { ok: false, error: `图片上传或保存超时：${file.name}` };
   }
 
   // ── Image Relocation (xPoster: 把上传的图片 atomic 块搬到 marker 位置) ──
@@ -706,18 +651,29 @@ window.__xArticleWrite = async function(payload) {
     });
   }
 
-  async function updateCoverGraphql(articleId, mediaId) {
-    return xGraphql('Es8InPh7mEkK9PxclxFAVQ', 'ArticleEntityUpdateCoverMedia', {
-      variables: {
-        articleEntityId: articleId,
-        coverMedia: { media_id: String(mediaId), media_category: 'DraftTweetImage' }
-      },
-      features: {
-        profile_label_improvements_pcf_label_in_post_enabled: true,
-        responsive_web_graphql_timeline_navigation_enabled: true
-      },
-      queryId: 'Es8InPh7mEkK9PxclxFAVQ'
-    });
+  async function uploadCover(image) {
+    const input = [...document.querySelectorAll('input[type="file"]')]
+      .find(input => !input.multiple && input.accept.includes('image/png'));
+    if (!input) throw new Error('封面文件入口未找到');
+    const previous = articleProps()?.articleEntity?.cover_media?.media_id;
+    const files = new DataTransfer();
+    files.items.add(base64ToFile(image.base64, image.fileName, image.mime));
+    input.files = files.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    const deadline = Date.now() + 120000;
+    while (Date.now() < deadline) {
+      await sleep(500);
+      const dialog = document.querySelector('[role="dialog"]');
+      const apply = dialog && [...dialog.querySelectorAll('button,[role="button"]')]
+        .find(button => ['应用', 'Apply'].includes(button.textContent.trim()) && !button.disabled);
+      if (apply && !apply.getAttribute('data-xarticle-applied')) {
+        apply.setAttribute('data-xarticle-applied', 'true');
+        apply.click();
+      }
+      const cover = articleProps()?.articleEntity?.cover_media;
+      if (cover?.media_id && cover.media_id !== previous) return { ok: true, mediaId: cover.media_id };
+    }
+    throw new Error('封面未完成保存，请检查裁剪窗口或网络');
   }
 
   // ── Main Flow ─────────────────────────────────────────
@@ -728,10 +684,10 @@ window.__xArticleWrite = async function(payload) {
     let articleId = p.articleId || articleIdFromUrl();
     const summary = {
       atomicOk: 0, atomicFail: 0,
-      imgOk: 0, imgFail: 0,
+      imgOk: 0, imgFail: 0, images: [],
       markersCleaned: 0, relocatedImages: 0,
       title: { requested: !!p.title, value: p.title || null, ui: null, graphql: null },
-      cover: { requested: !!p.cover, source: p.cover || null, graphql: null }
+      cover: { requested: !!p.cover, ui: null }
     };
 
     try {
@@ -750,7 +706,8 @@ window.__xArticleWrite = async function(payload) {
       console.log(LOG, 'Writing content blocks...');
       // 空编辑器先造出字符样本，否则 writeDraftBlocks 必失败、降级 HTML 粘贴导致图片落位错乱
       draftNode = await ensureDraftCharacterSample(draftNode) || draftNode;
-      const wr = writeDraftBlocks(draftNode, p.blocks);
+      const coverMarkers = new Set((p.images || []).filter(image => image.coverOnly).map(image => image.marker));
+      const wr = writeDraftBlocks(draftNode, p.blocks.filter(block => !coverMarkers.has(block.text)));
       if (!wr.ok) {
         // Fallback: paste HTML
         console.log(LOG, 'Block write failed, trying HTML paste...');
@@ -787,17 +744,14 @@ window.__xArticleWrite = async function(payload) {
       });
 
       // ── Images ──
-      const imageOps = (p.plan || []).filter(item => item.op.type === 'image');
-      const uploads = [];
-      let coverUpload = null;
+      const imageOps = (p.plan || []).filter(item => item.op.type === 'image' && !item.op.coverOnly);
 
       for (let i = 0; i < imageOps.length; i++) {
         const op = imageOps[i];
         const imgPayload = (p.images || []).find(ip => ip.marker === op.marker);
         if (!imgPayload) {
           summary.imgFail++;
-          replaceMarkerText(draftNode, op.marker, op.op.fallbackText || '[image unavailable]');
-          continue;
+          throw new Error('正文图片数据缺失');
         }
 
         console.log(LOG, `Uploading image ${i + 1}/${imageOps.length}...`);
@@ -806,6 +760,7 @@ window.__xArticleWrite = async function(payload) {
 
         if (ur.ok) {
           summary.imgOk++;
+          console.log(LOG, 'Image uploaded:', imgPayload.fileName, 'mediaId:', ur.mediaId);
           const upload = {
             marker: op.marker,
             blockKey: ur.blockKey,
@@ -819,7 +774,7 @@ window.__xArticleWrite = async function(payload) {
             coverOnly: !!imgPayload.coverOnly,
             settled: !!imgPayload.coverOnly
           };
-          uploads.push(upload);
+          summary.images.push({ fileName: imgPayload.fileName, mediaId: ur.mediaId });
 
           // 关键：把刚上传的图片块搬到 marker 位置，再清掉 marker（xPoster 流程）
           if (!upload.coverOnly) {
@@ -827,122 +782,49 @@ window.__xArticleWrite = async function(payload) {
             draftNode = settleResult.draftNode;
             summary.relocatedImages = (summary.relocatedImages || 0) + settleResult.moved;
             summary.markersCleaned += settleResult.markerCleaned;
-            upload.settled = !settleResult.missing;
+            if (settleResult.missing) throw new Error(`图片落位失败：${imgPayload.fileName}`);
+            upload.settled = true;
           }
 
-          if (imgPayload.coverOnly && !coverUpload) coverUpload = upload;
-          // 封面图块加入受保护集合，避免被后续 body 图片的 relocate 当成备用目标误搬
-          if (upload.coverOnly && upload.blockKey) protectedAtomicBlocks.add(upload.blockKey);
-
-          // 命中封面 → 设置封面
-          if (p.cover && upload.source && imageSourcesMatch(upload.source, p.cover) && upload.mediaId && articleId && !summary.cover.graphql) {
-            coverUpload = upload;
-            const cr = await updateCoverGraphql(articleId, upload.mediaId);
-            summary.cover.graphql = cr;
-          }
         } else {
           summary.imgFail++;
-          replaceMarkerText(draftNode, op.marker, imgPayload.fallbackText || (imgPayload.coverOnly ? '' : '[image upload failed]'));
+          throw new Error(`第 ${i + 1} 张正文图片失败：${ur.error}`);
         }
         draftNode = findDraftStateNode() || draftNode;
       }
 
-      // ── 兜底：对没 settle 成功的图片再批量 relocate 一次 ──
-      const unsettledUploads = uploads.filter((u) => !u.coverOnly && !u.settled);
-      if (unsettledUploads.length) {
-        console.log(LOG, `Reordering ${unsettledUploads.length} remaining image(s)...`);
-        await sleep(900);
-        draftNode = findDraftStateNode() || draftNode;
-        const rr = relocateImages(draftNode, unsettledUploads, protectedAtomicBlocks);
-        summary.relocatedImages = (summary.relocatedImages || 0) + rr.moved;
-        await sleep(400);
+      draftNode = findDraftStateNode() || draftNode;
+      summary.markersCleaned += cleanupMarkers(draftNode, p.markerPrefix);
+      if (p.cover) {
+        const cover = (p.images || []).find(image => image.coverOnly);
+        if (!cover) throw new Error('封面数据缺失');
+        summary.cover.ui = await uploadCover(cover);
       }
 
-      // ── 封面专用图片：从正文删除图片块 + 清掉封面 marker（封面只走 GraphQL，不该出现在正文） ──
-      // X 的图片上传是异步的，删早了会被重新插回，所以这里多轮重试；整体 try/catch 隔离，
-      // 绝不能让封面清理的异常带崩后面的 marker 清理。
-      if (coverUpload?.coverOnly) {
-        try {
-          let deleted = false;
-          for (let attempt = 0; attempt < 4; attempt++) {
-            await sleep(attempt === 0 ? 700 : 600);
-            draftNode = findDraftStateNode() || draftNode;
-            const coverBlockKey = findMediaBlockKey(draftNode, coverUpload);
-            if (coverBlockKey) {
-              const del = deleteBlockByKey(draftNode, coverBlockKey);
-              summary.cover.bodyBlockDeleted = del;
-              draftNode = findDraftStateNode() || draftNode;
-              if (del.ok) deleted = true;
-            } else if (deleted) {
-              // 已删且不再出现 → 稳定，收工
-              break;
-            } else {
-              summary.cover.bodyBlockDeleted = { ok: false, error: 'cover media block not found' };
-            }
-          }
-        } catch (e) {
-          summary.cover.bodyBlockDeleted = { ok: false, error: 'cover cleanup threw: ' + (e?.message || e) };
+      draftNode = findDraftStateNode() || draftNode;
+      const content = draftNode.props.editorState.getCurrentContent();
+      const imageIds = [];
+      content.getBlockMap().forEach(block => {
+        const key = block.getCharacterList().first()?.getEntity();
+        if (key && content.getEntity(key).getType() === 'MEDIA') {
+          imageIds.push(...content.getEntity(key).getData().mediaItems.map(item => item.mediaId));
         }
-        // 显式按精确字符串清掉封面 marker（兜底，不依赖 cleanupMarkers 的前缀匹配）
-        try {
-          if (coverUpload.marker) {
-            draftNode = findDraftStateNode() || draftNode;
-            replaceMarkerText(draftNode, coverUpload.marker, '');
-            draftNode = findDraftStateNode() || draftNode;
-          }
-        } catch (e) { /* 交给最终 cleanupMarkers 兜底 */ }
+      });
+      if (JSON.stringify(imageIds) !== JSON.stringify(summary.images.map(image => image.mediaId))) {
+        throw new Error('正文图片数量或顺序发生变化，请检查草稿');
       }
 
-      // ── Cleanup markers（多轮兜底）──
-      // X 的图片上传是异步的，单次清理后回调可能把 marker / 封面块改回来（限流时尤其明显），
-      // 所以这里多轮重试：每轮清 marker + 再删一次可能被重新插回的封面块，直到收敛或轮次用尽。
-      console.log(LOG, 'Cleaning markers (multi-pass)...');
-      for (let pass = 0; pass < 6; pass++) {
-        try {
-          draftNode = findDraftStateNode() || draftNode;
-          summary.markersCleaned += cleanupMarkers(draftNode, p.markerPrefix);
-
-          // 封面块若被重新插回正文，再删
-          if (coverUpload?.coverOnly) {
-            draftNode = findDraftStateNode() || draftNode;
-            const ck = findMediaBlockKey(draftNode, coverUpload);
-            if (ck) {
-              const del = deleteBlockByKey(draftNode, ck);
-              if (del.ok) summary.cover.bodyBlockDeleted = del;
-            }
-          }
-
-          await sleep(450);
-          draftNode = findDraftStateNode() || draftNode;
-          const remaining = countRemainingMarkers(draftNode);
-          const coverStillInBody = coverUpload?.coverOnly ? !!findMediaBlockKey(findDraftStateNode() || draftNode, coverUpload) : false;
-          if (remaining === 0 && !coverStillInBody) break;
-          console.log(LOG, `pass ${pass + 1}: ${remaining} marker(s) left, coverInBody=${coverStillInBody}`);
-        } catch (e) { console.warn(LOG, 'cleanup pass failed', e); break; }
-      }
-
-      return { ok: true, summary };
+      const incomplete = summary.imgFail || summary.atomicFail
+        || (p.cover && !summary.cover.ui?.ok)
+        || countRemainingMarkers(draftNode) > 0;
+      return incomplete
+        ? { ok: false, error: '部分内容未完成，请检查图片、封面及正文占位符', summary }
+        : { ok: true, summary };
 
     } catch (error) {
       console.error(LOG, error);
-      // Try to cleanup markers even on error
-      try {
-        draftNode = findDraftStateNode();
-        if (draftNode) cleanupMarkers(draftNode, p.markerPrefix);
-      } catch {}
       return { ok: false, error: error.message, stack: error.stack, summary };
     }
-  }
-
-  function imageSourcesMatch(left, right) {
-    const l = String(left || '').trim(), r = String(right || '').trim();
-    if (!l || !r) return false;
-    if (l === r) return true;
-    try {
-      const lu = new URL(l, location.href), ru = new URL(r, location.href);
-      lu.hash = ''; ru.hash = '';
-      return decodeURIComponent(lu.href) === decodeURIComponent(ru.href);
-    } catch { return l.split('#')[0] === r.split('#')[0]; }
   }
 
   console.log(LOG, 'Engine loaded');

@@ -673,6 +673,7 @@
     let listItems = [];
     // 封面源：若正文里某张图就是封面，把它当 coverOnly 处理（只设封面，不留在正文）
     const coverSource = String(options.coverSource || "").trim();
+    let coverUsed = false;
 
     const marker = (type) => `${prefix}${type}_${index++}__`;
     const addBlock = (type, text, segment = null) => {
@@ -772,7 +773,8 @@
       if (segment.type === "image") {
         const result = imageResults.get(segment);
         if (result?.ok) {
-          const isCover = coverSource && imageSourcesMatch(segment.source, coverSource);
+          const isCover = !coverUsed && coverSource && imageSourcesMatch(segment.source, coverSource);
+          if (isCover) coverUsed = true;
           addImageOperation(
             segment,
             result,
@@ -1269,6 +1271,7 @@
   const api = {
     looksLikeMarkdown,
     parseMarkdown,
+    findSpecialBlocks,
     markdownTitleCandidate,
     markdownTitleCandidateFromFileName,
     segmentCounts,

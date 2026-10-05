@@ -4,3 +4,4 @@ publish.js
 test_stealth.js
 *.tar.gz
 *.DS_Store
+work/

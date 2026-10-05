@@ -17,6 +17,7 @@
     b.textContent = text;
     document.body.appendChild(b);
     setTimeout(() => { b.style.opacity = '0'; setTimeout(() => b.remove(), 300); }, duration);
+    return b;
   }
 
   // ── 编辑器是否就绪（用于判断"是否在新建/编辑文章页"）──
@@ -94,7 +95,7 @@
         showBanner('❌ 未检测到编辑器 — 请在文章编辑页使用', '#f4212e');
         return;
       }
-      await doInject();
+      await doInject(status.imageCount || 0);
     } catch (e) {
       console.error(LOG, 'handleImport error:', e && e.message);
       showBanner('❌ 载入出错: ' + (e && e.message), '#f4212e', 6000);
@@ -103,17 +104,30 @@
     }
   }
 
-  async function doInject() {
-    showBanner('⏳ 正在载入文章...', '#1d9bf0');
+  async function doInject(imageCount) {
+    const progressBanner = showBanner('⏳ 正在载入文章，请等待完成后再操作...', '#1d9bf0', 15000 + imageCount * 125000);
+    document.querySelectorAll('[data-hermes-result]').forEach(el => el.remove());
 
     // 通过外部脚本注入（X 的 CSP 允许 localhost:*），加时间戳绕过缓存
     const script = document.createElement('script');
+    let scriptFailed = false;
+    script.onerror = () => { scriptFailed = true; };
     script.src = SERVER + '/inject-script?t=' + Date.now();
     (document.head || document.documentElement).appendChild(script);
 
-    await new Promise((r) => setTimeout(r, 5000));
-
-    const resultEl = document.querySelector('[data-hermes-result]');
+    // 每张上传最多等待 120 秒；固定 5 秒会把多图导入误判为未确认，并允许重复点击。
+    const deadline = Date.now() + 15000 + imageCount * 125000;
+    let resultEl;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 500));
+      if (scriptFailed) {
+        progressBanner.remove();
+        throw new Error('注入脚本加载失败，请检查本地服务和浏览器控制台');
+      }
+      resultEl = document.querySelector('[data-hermes-result]');
+      if (resultEl) break;
+    }
+    progressBanner.remove();
     if (resultEl) {
       try {
         const result = JSON.parse(resultEl.getAttribute('data-hermes-result'));
