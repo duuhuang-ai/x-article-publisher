@@ -33,13 +33,13 @@
 
 **Interfaces:** `window.xArticleFiles.parseArticle(markdown, fileName) -> parsed`；`imageOrigins(parsed) -> string[]`；`buildPayload(parsed, onProgress) -> Promise<payload>`。payload 与根目录 `payload.js` 返回字段一致，交给 `window.__xArticleWrite(payload)`。使用既有 `window.xPosterShared` API。
 
-- [ ] 先更新 AGENTS：扩展独立运行规则、打包副本约定及检查命令；记录用户已确认方案。
-- [ ] 写 `check-extension.js`，用 Node vm 加载 shared/article，模拟 Fetch 和本地附件读取；固定断言：文件名标题、代码中伪图片不下载、图片序列 `['A','B','重复 A','本地','cover']`、默认封面角色 `[true,false,false]`。请求参数不丢失，同一源只下载一次。
-- [ ] 加入失败断言：HTTP 404、HTML 冒充图片、17 MiB、超时、私有网络地址、未授权跳转、越界路径及失效目录授权均拒绝；data URI 成功。错误文本不能包含模拟签名参数。
-- [ ] 运行 `node check-extension.js`，确认新增模块缺失导致失败；实现上述接口后再运行，全部断言通过。
-- [ ] 用字节签名验证格式，逐个准备图片，使用既有 `buildPastePlan` 生成 payload。远程 Fetch 不发送 cookies，明确拒绝重定向，错误提示要求提供可直接访问的图片链接；读取过程中限制 16 MiB。压缩失败可用原图，下载失败不能跳过。
-- [ ] 打包脚本支持 `node package-extension.js` 和 `node package-extension.js --check`；后者逐字节比对根目录两份源码，失配退出非零。生成副本，运行检查及相关 `node --check`。
-- [ ] 仅提交本任务源码、打包文件与检查；不提交用户文章和测试素材。
+- [x] 先更新 AGENTS：扩展独立运行规则、打包副本约定及检查命令；记录用户已确认方案。
+- [x] 写 `check-extension.js`，用 Node vm 加载 shared/article，模拟 Fetch 和本地附件读取；固定断言：文件名标题、代码中伪图片不下载、图片序列 `['A','B','重复 A','本地','cover']`、默认封面角色 `[true,false,false]`。请求参数不丢失，同一源只下载一次。
+- [x] 加入失败断言：HTTP 404、HTML 冒充图片、17 MiB、超时、私有网络地址、未授权跳转、越界路径及失效目录授权均拒绝；data URI 成功。错误文本不能包含模拟签名参数。
+- [x] 运行 `node check-extension.js`，确认新增模块缺失导致失败；实现上述接口后再运行，全部断言通过。
+- [x] 用字节签名验证格式，逐个准备图片，使用既有 `buildPastePlan` 生成 payload。远程 Fetch 不发送 cookies，明确拒绝重定向，错误提示要求提供可直接访问的图片链接；读取过程中限制 16 MiB。压缩失败可用原图，下载失败不能跳过。
+- [x] 打包脚本支持 `node package-extension.js` 和 `node package-extension.js --check`；后者逐字节比对根目录两份源码，失配退出非零。生成副本，运行检查及相关 `node --check`。
+- [x] 仅提交本任务源码、打包文件与检查；不提交用户文章和测试素材。
 
 ## Task 2: 扩展入口、授权和新草稿导入
 
