@@ -1,21 +1,35 @@
 {
   "manifest_version": 3,
   "name": "Hermes X Publisher",
-  "version": "2.0",
-  "description": "Import Markdown articles into X Articles editor with one click",
-  "permissions": ["scripting", "activeTab"],
+  "version": "2.1.0",
+  "description": "选择 Markdown，直接导入 X 文章草稿，支持图床图片，无需本地服务。",
+  "permissions": [
+    "scripting",
+    "activeTab"
+  ],
   "host_permissions": [
-    "https://x.com/*",
-    "http://localhost:*/*"
+    "https://x.com/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": ["https://x.com/*/articles/edit/*", "https://x.com/compose/articles*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://x.com/*/articles/edit/*",
+        "https://x.com/compose/articles*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "action": {
+    "default_title": "导入 X 文章草稿"
+  }
 }

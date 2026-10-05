@@ -1,9 +1,10 @@
-/**
- * background.js — Hermes X Publisher service worker
- * Opens the Hermes server dashboard when extension icon is clicked.
- */
-chrome.action?.onClicked?.addListener(() => {
-  chrome.tabs.create({ url: 'http://localhost:8765' });
+// The extension page owns long imports; the service worker only opens it.
+async function openImporter() {
+  return chrome.tabs.create({ url: chrome.runtime.getURL('import.html') });
+}
+chrome.action.onClicked.addListener(openImporter);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type !== 'open-importer' || sender.id !== chrome.runtime.id) return;
+  openImporter().then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
+  return true;
 });
-
-console.log('[Hermes Publisher] Service worker ready');

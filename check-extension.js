@@ -64,5 +64,48 @@ const context = {
   await assert.rejects(api.buildPayload(api.parseArticle('![图](local.png)', 'bad.md')), /文件夹/);
   localFailure = '';
   await assert.rejects(api.buildPayload(api.parseArticle('![图](../outside.png)', 'bad.md')), /越出|越界/);
+  await checkImportFlow();
   console.log('PASS: 浏览器 payload 标题、图床/内嵌/附件、封面、顺序、去重及失败阻断');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+// Broken permission gating or result handling would write an unwanted draft / show false success.
+async function checkImportFlow() {
+  assert(fs.existsSync('./extension/import.js'), '独立导入入口尚未实现');
+  class Element {
+    constructor() { this.handlers = {}; this.textContent = ''; this.disabled = false; this.hidden = false; this.files = []; }
+    addEventListener(type, handler) { this.handlers[type] = handler; }
+  }
+  const elements = Object.fromEntries(['markdown','details','folder-section','folder','folder-name','import','status','draft'].map(id => [id, new Element()]));
+  let permission = false, created = 0, written = 0, engineOK = true, nonempty = false;
+  const editor = { textContent: '', getBoundingClientRect: () => ({ width: 600, height: 400 }) };
+  const page = { location: { href: 'https://x.com/compose/articles/edit/123' },
+    document: { querySelectorAll: () => { editor.textContent = nonempty ? 'old draft' : ''; return [editor]; }, querySelector: () => null },
+    window: { __xArticleWrite: async () => { written++; return { ok: engineOK, error: '测试注入失败' }; } }, Date, Promise, setTimeout };
+  const imported = { window: { xPosterShared: shared, xArticleFiles: context.window.xArticleFiles },
+    document: { getElementById: id => elements[id] }, console, URL, Date, Promise, setTimeout,
+    chrome: { permissions: { request: async () => permission }, tabs: {
+      getCurrent: async () => ({ id: 1, windowId: 2 }), create: async () => { created++; return { id: 100 }; },
+      get: async () => ({ url: 'https://x.com/compose/articles/edit/123', status: 'complete' }) },
+      scripting: { executeScript: async spec => {
+        if (spec.files) return [{ result: undefined }];
+        const fn = vm.runInNewContext('(' + spec.func.toString() + ')', page);
+        return [{ result: await fn(...(spec.args || [])) }];
+      } }
+    }
+  };
+  vm.runInNewContext(fs.readFileSync('./extension/import.js', 'utf8'), imported);
+  elements.markdown.files = [{ name: '示例.md', text: async () => '![图](https://img.example/a)' }];
+  await elements.markdown.handlers.change();
+  await elements.import.handlers.click();
+  assert.equal(created, 0); assert.match(elements.status.textContent, /授权/);
+  permission = true;
+  await Promise.all([elements.import.handlers.click(), elements.import.handlers.click()]);
+  assert.equal(created, 1); assert.equal(written, 1); assert.match(elements.status.textContent, /完成/);
+  engineOK = false;
+  await elements.import.handlers.click();
+  assert.match(elements.status.textContent, /失败/); assert(!elements.status.textContent.includes('完成'));
+  nonempty = true;
+  const before = written;
+  await elements.import.handlers.click();
+  assert.equal(written, before); assert.match(elements.status.textContent, /非空|已有/);
+}

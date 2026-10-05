@@ -1,153 +1,21 @@
-/**
- * content.js v8 — Hermes X Publisher
- * 右上角浮动「载入文章」按钮，点击直接载入（无预览弹窗）。
- * 仅在文章编辑器页面（检测到 Draft.js 编辑器）显示，其他 X 页面一律不显示。
- */
-(async function () {
-  'use strict';
-
-  const LOG = '[Hermes]';
-  const SERVER = 'http://localhost:8765';
-  let injecting = false;
-
-  // ── Banner notification ──
-  function showBanner(text, color = '#1d9bf0', duration = 6000) {
-    const b = document.createElement('div');
-    b.style.cssText = `position:fixed;top:54px;right:12px;background:${color};color:#fff;padding:10px 18px;border-radius:8px;font-family:-apple-system,sans-serif;font-size:14px;z-index:999999;box-shadow:0 4px 12px rgba(0,0,0,0.3);transition:opacity 0.3s;max-width:380px;word-wrap:break-word`;
-    b.textContent = text;
-    document.body.appendChild(b);
-    setTimeout(() => { b.style.opacity = '0'; setTimeout(() => b.remove(), 300); }, duration);
-    return b;
-  }
-
-  // ── 编辑器是否就绪（用于判断"是否在新建/编辑文章页"）──
-  function editorReady() {
-    const sels = [
-      '[data-contents="true"] [contenteditable="true"]',
-      '[contenteditable="true"][role="textbox"]',
-      '[contenteditable="true"].public-DraftEditor-content'
-    ];
-    for (const sel of sels) {
-      for (const el of document.querySelectorAll(sel)) {
-        const r = el.getBoundingClientRect();
-        if (r.width > 200 && r.height > 80) return true;
-      }
-    }
-    return false;
-  }
-
-  // ── 创建右上角浮动按钮 ──
-  function makeButton() {
-    const btn = document.createElement('div');
-    btn.id = 'hermes-import-btn';
-    btn.innerHTML = '📥 载入文章';
-    btn.setAttribute('role', 'button');
-    btn.style.cssText = `
-      position: fixed; top: 12px; right: 12px; z-index: 99998;
-      background: linear-gradient(135deg, #1d9bf0, #0d8bd8);
-      color: #fff; padding: 8px 16px; border-radius: 20px;
-      font-family: -apple-system, sans-serif; font-size: 13px; font-weight: 700;
-      cursor: pointer; box-shadow: 0 2px 8px rgba(29,155,240,0.4);
-      transition: transform 0.15s, box-shadow 0.15s; user-select: none;
-    `;
-    btn.onmouseenter = () => { btn.style.transform = 'scale(1.05)'; btn.style.boxShadow = '0 4px 12px rgba(29,155,240,0.5)'; };
-    btn.onmouseleave = () => { btn.style.transform = 'scale(1)'; btn.style.boxShadow = '0 2px 8px rgba(29,155,240,0.4)'; };
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      console.log(LOG, '🖱 「载入文章」被点击');
-      handleImport();
-    }, true);
-    return btn;
-  }
-
-  // ── 仅在编辑器页显示按钮，其他页面移除 ──
+// A shortcut to the same standalone importer shown by the extension icon.
+(() => {
   function syncButton() {
-    const btn = document.getElementById('hermes-import-btn');
-    if (editorReady()) {
-      if (!btn) {
-        document.body.appendChild(makeButton());
-        console.log(LOG, '✅ 载入按钮已显示（编辑器页）');
-      }
-    } else if (btn) {
-      btn.remove();
-    }
+    const ready = Array.from(document.querySelectorAll('[contenteditable="true"]')).some(el => {
+      const rect = el.getBoundingClientRect();
+      return rect.width > 200 && rect.height > 80;
+    });
+    const existing = document.getElementById('hermes-import-btn');
+    if (!ready) { existing?.remove(); return; }
+    if (existing) return;
+    const button = document.createElement('button');
+    button.id = 'hermes-import-btn';
+    button.type = 'button';
+    button.textContent = '📥 选择 Markdown';
+    button.style.cssText = 'position:fixed;top:12px;right:12px;z-index:99998;background:#116ab5;color:white;padding:8px 16px;border:0;border-radius:20px;font:600 13px system-ui;cursor:pointer';
+    button.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'open-importer' }));
+    document.body.appendChild(button);
   }
-
-  // ── 点击：检查服务 → 直接载入（无弹窗）──
-  async function handleImport() {
-    if (injecting) { showBanner('⏳ 正在载入中...', '#1d9bf0', 3000); return; }
-    injecting = true;
-    try {
-      let status;
-      try {
-        const resp = await fetch(SERVER + '/status');
-        status = await resp.json();
-      } catch (e) {
-        showBanner('❌ 无法连接 Hermes 服务器 (localhost:8765) — 请先运行发布流程', '#f4212e');
-        return;
-      }
-      if (!status || !status.ready) {
-        showBanner('❌ Hermes 服务器未就绪 — 请先运行发布流程', '#f4212e');
-        return;
-      }
-      if (!editorReady()) {
-        showBanner('❌ 未检测到编辑器 — 请在文章编辑页使用', '#f4212e');
-        return;
-      }
-      await doInject(status.imageCount || 0);
-    } catch (e) {
-      console.error(LOG, 'handleImport error:', e && e.message);
-      showBanner('❌ 载入出错: ' + (e && e.message), '#f4212e', 6000);
-    } finally {
-      injecting = false;
-    }
-  }
-
-  async function doInject(imageCount) {
-    const progressBanner = showBanner('⏳ 正在载入文章，请等待完成后再操作...', '#1d9bf0', 15000 + imageCount * 125000);
-    document.querySelectorAll('[data-hermes-result]').forEach(el => el.remove());
-
-    // 通过外部脚本注入（X 的 CSP 允许 localhost:*），加时间戳绕过缓存
-    const script = document.createElement('script');
-    let scriptFailed = false;
-    script.onerror = () => { scriptFailed = true; };
-    script.src = SERVER + '/inject-script?t=' + Date.now();
-    (document.head || document.documentElement).appendChild(script);
-
-    // 每张上传最多等待 120 秒；固定 5 秒会把多图导入误判为未确认，并允许重复点击。
-    const deadline = Date.now() + 15000 + imageCount * 125000;
-    let resultEl;
-    while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 500));
-      if (scriptFailed) {
-        progressBanner.remove();
-        throw new Error('注入脚本加载失败，请检查本地服务和浏览器控制台');
-      }
-      resultEl = document.querySelector('[data-hermes-result]');
-      if (resultEl) break;
-    }
-    progressBanner.remove();
-    if (resultEl) {
-      try {
-        const result = JSON.parse(resultEl.getAttribute('data-hermes-result'));
-        if (result.ok) {
-          showBanner('✅ 文章已载入！检查内容后点 Publish 发布', '#00ba7c', 8000);
-        } else {
-          showBanner('❌ 载入失败: ' + (result.error || '未知错误'), '#f4212e', 6000);
-        }
-      } catch (e) {
-        showBanner('⚠️ 载入可能成功，请检查编辑器', '#ffa500', 5000);
-      }
-      resultEl.remove();
-    } else {
-      showBanner('⚠️ 未收到确认信号，请检查编辑器内容', '#ffa500', 5000);
-    }
-  }
-
-  // ── Lifecycle：持续根据是否在编辑器页来显示/隐藏按钮 ──
   setTimeout(syncButton, 1000);
   setInterval(syncButton, 800);
-
-  console.log(LOG, '✅ Content script v8 ready — 仅编辑器页显示载入按钮');
 })();
