@@ -65,7 +65,7 @@ function dashboardHTML() {
   .mode-auto{background:#00ba7c20;color:#00ba7c}.mode-manual{background:#1d9bf020;color:#1d9bf0}
 </style></head><body>
 <h1>🚀 X Article Injector <span class="mode-indicator ${modeClass}">${modeLabel}</span></h1>
-<div class="sub">Dual-mode: Extension auto-inject + Manual console paste</div>
+<div class="sub">旧版排错 Dashboard；扩展 2.1.0 不连接此服务。日常使用：点 Chrome 插件图标 → 选择 Markdown → 导入 X 草稿。以下自动触发仅兼容旧扩展。</div>
 
 <div class="card"><h2>📄 ${payload.title || '(untitled)'}</h2>
 <p style="color:#71767b">text: ${payload.blocks?.filter(b=>b.type==='text').length||0} | images: ${payload.images.length} | script: ${scriptSize} KB</p></div>
@@ -141,7 +141,8 @@ server.listen(PORT, 'localhost', () => {
   if (auto) trigger.active = true;
   
   console.log('═'.repeat(60));
-  console.log(`🚀 Hermes X Publisher Server v4`);
+  console.log(`🚀 Hermes X Publisher Server v4 — legacy diagnostics`);
+  console.log(`   扩展 2.1.0 独立运行；此 Dashboard 的自动触发仅兼容旧扩展。`);
   console.log(`   Port:    ${PORT}`);
   console.log(`   Article: ${path.basename(mdPath)}`);
   console.log(`   Title:   ${payload.title || '(untitled)'}`);
@@ -151,7 +152,7 @@ server.listen(PORT, 'localhost', () => {
   console.log('');
   console.log(`📋 Manual:  Open http://localhost:${PORT} → Copy → Console paste`);
   if (!auto) {
-    console.log(`🤖 Auto:    Open http://localhost:${PORT} → Publish via Extension`);
+    console.log(`🤖 Legacy:  Open http://localhost:${PORT} → Publish via Extension`);
     console.log(`            Then open x.com/compose/articles/new → Click New Article`);
   } else {
     console.log(`⚡ AUTO mode: Trigger already active. Just open x.com/compose/articles/new → New Article`);

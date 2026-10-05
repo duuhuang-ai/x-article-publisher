@@ -75,7 +75,9 @@ node xarticle-server.js "/absolute/path/to/副本目录/article.md"
 # 可查看 http://localhost:8765/payload；Ctrl+C 停止服务
 ```
 
-命令行工具需要 Node.js ≥ 18，图床副本只写 `work/`。可选 `auto-publish.js` 仍依赖 `playwright-core`，本轮未使用。旧 Dashboard 的手动脚本入口与默认扩展流程分开保留。
+Chrome 扩展版本为 **2.1.0**；`package.json` 的 **4.1.0** 是保留的旧命令行工具版本，两者分别记录在 [CHANGELOG](CHANGELOG.md)。`setup.sh` 仅辅助显示安装步骤，Node 检查不影响扩展安装。
+
+命令行工具需要 Node.js ≥ 18，图床副本只写 `work/`。可选 `auto-publish.js` 仍依赖 `playwright-core`，未纳入独立扩展验收范围。旧 Dashboard 的手动脚本入口与默认扩展流程分开保留。
 
 ## 验证
 
@@ -84,10 +86,10 @@ node package-extension.js --check
 node check-extension.js
 node check-editor.js
 node check-images.js
-bash -n publish-to-x.sh
+bash -n publish-to-x.sh setup.sh
 ```
 
-JavaScript 改动还需运行对应文件的 `node --check`。最小检查覆盖图片顺序、封面、去重、大小/格式/地址校验、下载失败阻断和导入保护。真实账号记录保留在被 Git 忽略的 `work/verification-2026-10-05.md`；本地检查不能替代 X 实测。
+JavaScript 改动还需运行对应文件的 `node --check`。最小检查覆盖图片顺序、封面、去重、大小/格式/地址校验、下载失败阻断和导入保护。2026-10-05 已通过真实账号验证：纯文字、图床文章（1 封面、13 正文图，刷新后完整）、本地附件及独立封面；只创建草稿，未公开发布。真实账号记录保留在被 Git 忽略的 `work/verification-2026-10-05.md`；本地检查不能替代 X 实测。
 
 ## License
 

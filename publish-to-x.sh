@@ -1,12 +1,12 @@
 #!/bin/bash
-# publish-to-x.sh — Hermes one-click X Article publisher
+# publish-to-x.sh — legacy local diagnostics for X Articles
 # Usage: publish-to-x.sh <markdown_file.md>
 #
 # 1. Prepares a local article copy in work/
 # 2. Starts server in foreground (Ctrl+C to stop)
 # 3. Opens X Articles in Chrome
 #
-# User then: clicks [📥 载入文章], checks the draft, publishes manually
+# Daily use: Chrome extension icon → choose Markdown → import draft; see README.md
 
 set -e
 
@@ -25,7 +25,7 @@ if [ ! -f "$MD_FILE" ]; then
 fi
 
 if [ "$PORT" != "8765" ]; then
-  echo "❌ Chrome 扩展使用固定端口 8765"
+  echo "❌ 旧命令行排错服务使用固定端口 8765；独立扩展不需要本地服务"
   exit 1
 fi
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
@@ -38,17 +38,17 @@ MD_FILE="$(node "$SCRIPT_DIR/prepare-article.js" "$MD_FILE")"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "✅ 文章加载完成！"
+echo "✅ 发布副本准备完成（旧命令行排错）"
 echo ""
-echo "   📄 文件: $(basename "$MD_FILE")"
+echo "   📄 副本: $MD_FILE"
 echo "   🔌 端口: $PORT"
 echo ""
-echo "   👉 Chrome 已打开 X Articles 页面"
-echo "   👉 在右上角找 [📥 载入文章] 按钮"
-echo "   👉 点击直接载入草稿 → 人工检查 → 手动发布"
+echo "   👉 将打开 X Articles 页面；扩展 2.1.0 不会连接此服务"
+echo "   👉 日常导入：点工具栏插件 → 选择上方副本 Markdown"
+echo "   👉 点「导入 X 草稿」→ 人工检查 → 手动发布"
 echo "   👉 此终端按 Ctrl+C 停止服务"
 echo ""
-echo "   💡 手动备选: http://localhost:$PORT"
+echo "   💡 旧 Dashboard 排错: http://localhost:$PORT"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Open X Articles in Chrome
