@@ -17,17 +17,40 @@ assert.equal(saved(props, '', ''), false);
 console.log('PASS: 图片必须完成保存、实体确认及媒体映射，才允许继续');
 
 // Exercise the real entry point with an editor whose insertion/paste does nothing.
-async function failedWrite(title, type = 'unstyled', articleId = '123', text = '') {
+async function failedWrite(title, type = 'unstyled', articleId = '123', text = '', canWrite = false) {
   let writes = 0, clock = 0;
-  const chars = { size: 0, first: () => null, some: () => false };
-  const block = { getKey: () => 'blank', getText: () => text, getType: () => type, getCharacterList: () => chars };
-  const map = { find: () => null, forEach: fn => fn(block, 'blank') };
-  const content = { getBlockMap: () => map, getBlocksAsArray: () => [block] };
-  const node = { props: { editorState: { getCurrentContent: () => content, getSelection: () => ({}) }, onChange: () => writes++ } };
+  // Only the Draft immutable primitives are simulated; runFlow and its save wait run unchanged.
+  function List(items = []) { return { constructor: List, size: items.length, get: i => items[i], first: () => items[0], some: fn => items.some(fn), push: item => List([...items, item]) }; }
+  function Block(text, type, key, chars = List()) {
+    return { getKey: () => key, getText: () => text, getType: () => type, getCharacterList: () => chars,
+      getData: () => ({ clear: () => ({}) }), merge: data => Block(data.text, data.type, data.key, data.characterList) };
+  }
+  function BlockMap(blocks = []) {
+    const map = new Map(blocks.map(block => [block.getKey(), block]));
+    map.constructor = BlockMap; map.find = fn => [...map.values()].find(fn);
+    return map;
+  }
+  let map = BlockMap([Block(text, type, 'blank')]);
+  const content = { getBlockMap: () => map, getBlocksAsArray: () => [...map.values()], set: (key, value) => { if (key === 'blockMap') map = value; return content; } };
+  class Selection { static createEmpty() { return new Selection(); } }
+  class State {
+    getCurrentContent() { return content; } getSelection() { return new Selection(); }
+    static push() { return new State(); } static moveSelectionToEnd(state) { return state; }
+  }
+  const savedArticle = { title: '', content_state: { blocks: [] } };
+  const node = { props: { editorState: new State(), onChange: state => {
+    writes++; node.props.editorState = state;
+    if (canWrite === 'save-body') savedArticle.content_state.blocks = content.getBlocksAsArray().map(block => ({ key: block.getKey(), text: block.getText() }));
+  } } };
   const editor = { getBoundingClientRect: () => ({ width: 600, height: 400 }), focus() {}, dispatchEvent() {},
-    __reactFiber$test: { stateNode: node, memoizedProps: { prevMediaEntityKeys: [], articleEntity: { title: '', content_state: { blocks: [] } } } } };
+    __reactFiber$test: { stateNode: node, memoizedProps: { prevMediaEntityKeys: [], articleEntity: savedArticle } } };
   const page = { window: {}, location: { href: 'https://x.com/compose/articles/edit/123' },
-    document: { cookie: '', querySelectorAll: selector => selector.includes('input') ? [] : [editor], execCommand: () => false },
+    document: { cookie: '', querySelectorAll: selector => selector.includes('input') ? [] : [editor], execCommand: () => {
+      if (!canWrite) return false;
+      const style = { clear() { return this; }, add() { return this; } };
+      const char = { getEntity: () => null, getStyle: () => style, set() { return this; } };
+      map = BlockMap([Block('x', 'unstyled', 'sample', List([char]))]); return true;
+    } },
     Date: { now: () => clock }, setTimeout: fn => { clock += 500; fn(); },
     DataTransfer: class { setData() {} }, ClipboardEvent: class { constructor(type, options) { Object.assign(this, options); } },
     fetch: async () => ({ ok: false, status: 403, text: async () => 'denied' }), console: { log() {}, error() {} } };
@@ -41,7 +64,9 @@ async function failedWrite(title, type = 'unstyled', articleId = '123', text = '
   const results = await Promise.allSettled([
     failedWrite('expected title'), failedWrite(''),
     failedWrite('', 'atomic', '123', ' ').then(result => assert.match(result.error, /非空|已有/)),
-    failedWrite('', 'unstyled', '999').then(result => assert.match(result.error, /草稿|切换/))
+    failedWrite('', 'unstyled', '999').then(result => assert.match(result.error, /草稿|切换/)),
+    failedWrite('', 'unstyled', '123', '', true).then(result => assert.match(result.error, /未保存/, '正文写入后必须等到服务端保存')),
+    failedWrite('expected title', 'unstyled', '123', '', 'save-body').then(result => assert.match(result.error, /未保存/, '正文保存也不能掩盖标题失败'))
   ]);
   const failures = results.flatMap((result, i) => result.status === 'rejected' ? [`case ${i + 1}: ${result.reason.message}`] : []);
   assert.equal(failures.length, 0, failures.join('\n'));
